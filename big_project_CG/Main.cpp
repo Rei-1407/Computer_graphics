@@ -1,684 +1,417 @@
-﻿#define GLEW_STATIC 
-#include <GL/glew.h>
-#include <SDL.h>
-#include <SDL_opengl.h>
-#include <SDL_image.h>
-
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-
-#include <iostream>
+﻿#include <SDL.h>
 #include <vector>
 #include <string>
-#include <fstream>
-#include <map>
-#include <sstream> 
-#include <filesystem> 
+#include <iostream>
+#include <algorithm>
+#include <cmath>
 
-// OpenGL Error Checking Macro
-#define GL_CHECK(stmt) do { \
-    stmt; \
-    checkOpenGLError(#stmt, __FILE__, __LINE__); \
-} while (0)
+#include <SDL2_gfxPrimitives.h> // Xu ly rang cua
 
-void checkOpenGLError(const char* stmt, const char* fname, int line) {
-    GLenum err = glGetError();
-    if (err != GL_NO_ERROR) {
-        std::cerr << "OpenGL error " << err << " (0x" << std::hex << err << std::dec << ") at " << stmt << " in " << fname << ":" << line << std::endl;
-        // You might want to set a breakpoint here during debugging
-    }
-}
-
-
-struct CharInfo {
-    float u1 = 0.0f, v1 = 0.0f, u2 = 0.0f, v2 = 0.0f;
-    float width = 0.0f, height = 0.0f;
-    float advanceX = 0.0f;
-    float offsetX = 0.0f, offsetY = 0.0f; // From BMFont: xoffset, yoffset (distance from top of line to top of char)
+struct Point { // cai dat toa do diem trong khong gian 2D
+    float x, y;
 };
 
-struct Vertex3D {
-    glm::vec3 position;
-    glm::vec2 texCoords;
+Point operator+(const Point& a, const Point& b) { return { a.x + b.x, a.y + b.y }; }     // cong toa do
+Point operator-(const Point& a, const Point& b) { return { a.x - b.x, a.y - b.y }; }     // tru toa do
+Point operator*(const Point& p, float scalar) { return { p.x * scalar, p.y * scalar }; } // ti le
+
+struct BezierPath {
+    Point p0, p1, p2, p3; // Start, Control1, Control2, End
 };
 
-SDL_Window* gWindow = nullptr;
-SDL_GLContext gContext;
-GLuint gShaderProgramID = 0;
-GLuint gFontTextureID = 0;
-
-std::map<char, CharInfo> gFontMap;
-float gFontAtlasWidth = 0;
-float gFontAtlasHeight = 0;
-float gFontLineHeight = 0;
-float gFontBase = 0;
-
-GLuint gTextVAO = 0, gTextVBO = 0;
-std::vector<Vertex3D> gAllTextVertices;
-
-size_t gVertexOffset_Part1 = 0, gVertexCount_Part1 = 0;
-size_t gVertexOffset_Part2 = 0, gVertexCount_Part2 = 0;
-size_t gVertexOffset_Part3 = 0, gVertexCount_Part3 = 0;
-
-float gTextBlockWidth_Part1 = 0.0f;
-float gTextBlockWidth_Part2 = 0.0f;
-float gTextBlockWidth_Part3 = 0.0f;
-
-float gMonumentRotationX = 15.0f;
-float gCameraDistance = 150.0f;
-float gCameraYaw = 0.0f;
-float gCameraPitch = 10.0f;
-
-
-const int SCREEN_WIDTH = 1280;
-const int SCREEN_HEIGHT = 720;
-
-const char* VERTEX_SHADER_SOURCE = R"glsl(
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec2 aTexCoord;
-
-out vec2 TexCoord;
-
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
-
-void main() {
-    gl_Position = projection * view * model * vec4(aPos, 1.0);
-    TexCoord = aTexCoord;
-}
-)glsl";
-
-const char* FRAGMENT_SHADER_SOURCE = R"glsl(
-#version 330 core
-out vec4 FragColor;
-in vec2 TexCoord;
-
-uniform sampler2D textTexture;
-uniform vec3 textColor;
-
-void main() {
-    vec4 texColor = texture(textTexture, TexCoord);
-    if(texColor.a < 0.1) 
-        discard;
-    FragColor = vec4(textColor, 1.0) * texColor; 
-}
-)glsl";
-
-GLuint compileShader(GLenum type, const char* source) {
-    GLuint shader = glCreateShader(type);
-    GL_CHECK(glShaderSource(shader, 1, &source, NULL));
-    GL_CHECK(glCompileShader(shader));
-    GLint success;
-    GL_CHECK(glGetShaderiv(shader, GL_COMPILE_STATUS, &success));
-    if (!success) {
-        char infoLog[1024];
-        GL_CHECK(glGetShaderInfoLog(shader, sizeof(infoLog), NULL, infoLog));
-        std::cerr << "ERROR::SHADER::TYPE_" << (type == GL_VERTEX_SHADER ? "VERTEX" : "FRAGMENT") << "::COMPILATION_FAILED\n" << infoLog << std::endl;
-        GL_CHECK(glDeleteShader(shader));
-        return 0;
-    }
-    return shader;
+// Helper to create a straight line using BezierPath structure
+BezierPath make_line(Point start, Point end) {
+    return { start, start, end, end };
 }
 
-GLuint createShaderProgram(const char* vertexSource, const char* fragmentSource) {
-    GLuint vertexShader = compileShader(GL_VERTEX_SHADER, vertexSource);
-    GLuint fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentSource);
-    if (vertexShader == 0 || fragmentShader == 0) {
-        return 0;
+struct Glyph {
+    char character_code;
+    std::vector<BezierPath> paths;
+    float advanceWidth;
+    Point minBounds, maxBounds;
+
+    Glyph() : character_code(0), advanceWidth(0.0f), minBounds({ 0,0 }), maxBounds({ 0,0 }) {}
+
+    static Point getCubicBezierPoint(Point p0, Point p1, Point p2, Point p3, float t) {
+        Point result;
+        float u = 1.0f - t;
+        float tt = t * t;
+        float uu = u * u;
+        float uuu = uu * u;
+        float ttt = tt * t;
+        result.x = uuu * p0.x + 3.0f * uu * t * p1.x + 3.0f * u * tt * p2.x + ttt * p3.x;
+        result.y = uuu * p0.y + 3.0f * uu * t * p1.y + 3.0f * u * tt * p2.y + ttt * p3.y;
+        return result;
     }
-    GLuint program = glCreateProgram();
-    GL_CHECK(glAttachShader(program, vertexShader));
-    GL_CHECK(glAttachShader(program, fragmentShader));
-    GL_CHECK(glLinkProgram(program));
-    GLint success;
-    GL_CHECK(glGetProgramiv(program, GL_LINK_STATUS, &success));
-    if (!success) {
-        char infoLog[1024];
-        GL_CHECK(glGetProgramInfoLog(program, sizeof(infoLog), NULL, infoLog));
-        std::cerr << "ERROR::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
-        GL_CHECK(glDeleteProgram(program));
-        program = 0;
+
+    void calculateBounds() {
+        if (paths.empty()) {
+            minBounds = { 0,0 }; maxBounds = { 0,0 };
+            if (character_code == ' ' && advanceWidth > 0) { // Special handling for space
+                minBounds = { 0, -1 }; // Give it some minimal height for layout consistency
+                maxBounds = { advanceWidth, 1 };
+            }
+            return;
+        }
+        minBounds = paths[0].p0;
+        maxBounds = paths[0].p0;
+
+        auto update_bounds_for_point = [&](const Point& p) {
+            minBounds.x = std::min(minBounds.x, p.x);
+            minBounds.y = std::min(minBounds.y, p.y);
+            maxBounds.x = std::max(maxBounds.x, p.x);
+            maxBounds.y = std::max(maxBounds.y, p.y);
+            };
+
+        for (const auto& path : paths) {
+            const int samples = 20;
+            update_bounds_for_point(path.p0);
+            for (int i = 1; i <= samples; ++i) {
+                float t = static_cast<float>(i) / static_cast<float>(samples);
+                Point curvePoint = getCubicBezierPoint(path.p0, path.p1, path.p2, path.p3, t);
+                update_bounds_for_point(curvePoint);
+            }
+            update_bounds_for_point(path.p3);
+        }
     }
-    GL_CHECK(glDeleteShader(vertexShader));
-    GL_CHECK(glDeleteShader(fragmentShader));
-    return program;
+
+    Point getSize() const {
+        return maxBounds - minBounds;
+    }
+};
+
+// --- Rendering Function ---
+void renderTransformedGlyph_AntiAliased(SDL_Renderer* renderer, const Glyph& glyph,
+    float scale, Point screenTopLeftOfBoundingBox,
+    SDL_Color color, int segmentsPerCurve, Uint8 thickness) {
+    if (glyph.paths.empty() || thickness == 0) return;
+
+    for (const auto& path : glyph.paths) {
+        BezierPath screenPath = {
+            (path.p0 - glyph.minBounds) * scale + screenTopLeftOfBoundingBox,
+            (path.p1 - glyph.minBounds) * scale + screenTopLeftOfBoundingBox,
+            (path.p2 - glyph.minBounds) * scale + screenTopLeftOfBoundingBox,
+            (path.p3 - glyph.minBounds) * scale + screenTopLeftOfBoundingBox
+        };
+
+        Point prevPoint = screenPath.p0;
+        for (int i = 1; i <= segmentsPerCurve; ++i) {
+            float t = static_cast<float>(i) / static_cast<float>(segmentsPerCurve);
+            Point currentPoint = Glyph::getCubicBezierPoint(screenPath.p0, screenPath.p1, screenPath.p2, screenPath.p3, t);
+
+            thickLineRGBA(renderer,
+                static_cast<Sint16>(prevPoint.x), static_cast<Sint16>(prevPoint.y),
+                static_cast<Sint16>(currentPoint.x), static_cast<Sint16>(currentPoint.y),
+                thickness,
+                color.r, color.g, color.b, color.a);
+
+            prevPoint = currentPoint;
+        }
+    }
 }
 
-bool init() {
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        std::cerr << "SDL could not initialize! SDL_Error: " << SDL_GetError() << std::endl;
-        return false;
-    }
 
-    int imgFlags = IMG_INIT_PNG;
-    if (!(IMG_Init(imgFlags) & imgFlags)) {
-        std::cerr << "SDL_image could not initialize! IMG_Error: " << IMG_GetError() << std::endl;
-        SDL_Quit();
-        return false;
-    }
-    std::cout << "INFO: SDL_image initialized successfully for PNG." << std::endl;
+// --- Glyph Definition Functions ---
+const float GLYPH_DESIGN_HEIGHT = 40.0f;
+const float GLYPH_DESIGN_WIDTH = 30.0f;
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+Glyph createVectorGlyphN() {
+    Glyph n; n.character_code = 'N';
+    float w = GLYPH_DESIGN_WIDTH * 0.9f; float h = GLYPH_DESIGN_HEIGHT;
+    Point p0 = { 0, h }; Point p1 = { 0, 0 }; Point p2 = { w, h }; Point p3 = { w, 0 };
+    n.paths.push_back(make_line(p0, p1));
+    n.paths.push_back(make_line(p1, p2));
+    n.paths.push_back(make_line(p2, p3));
+    n.advanceWidth = w + 5.0f; n.calculateBounds(); return n;
+}
 
-    gWindow = SDL_CreateWindow("3D Logo Text Intro", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
-    if (!gWindow) {
-        std::cerr << "Window could not be created! SDL_Error: " << SDL_GetError() << std::endl;
-        IMG_Quit();
-        SDL_Quit();
-        return false;
-    }
+Glyph createVectorGlyphO() {
+    Glyph o; o.character_code = 'O';
+    float cx = GLYPH_DESIGN_WIDTH / 2.0f; float cy = GLYPH_DESIGN_HEIGHT / 2.0f;
+    float rx = GLYPH_DESIGN_WIDTH / 2.0f; float ry = GLYPH_DESIGN_HEIGHT / 2.0f;
+    float c_bez = 0.552284749831f; // Bezier control point constant for a circle approximation
+    o.paths.push_back({ {cx, cy - ry}, {cx + rx * c_bez, cy - ry}, {cx + rx, cy - ry * c_bez}, {cx + rx, cy} });
+    o.paths.push_back({ {cx + rx, cy}, {cx + rx, cy + ry * c_bez}, {cx + rx * c_bez, cy + ry}, {cx, cy + ry} });
+    o.paths.push_back({ {cx, cy + ry}, {cx - rx * c_bez, cy + ry}, {cx - rx, cy + ry * c_bez}, {cx - rx, cy} });
+    o.paths.push_back({ {cx - rx, cy}, {cx - rx, cy - ry * c_bez}, {cx - rx * c_bez, cy - ry}, {cx, cy - ry} });
+    o.advanceWidth = GLYPH_DESIGN_WIDTH + 5.0f; o.calculateBounds(); return o;
+}
 
-    gContext = SDL_GL_CreateContext(gWindow);
-    if (!gContext) {
-        std::cerr << "OpenGL context could not be created! SDL_Error: " << SDL_GetError() << std::endl;
-        SDL_DestroyWindow(gWindow);
-        IMG_Quit();
-        SDL_Quit();
-        return false;
-    }
+Glyph createVectorGlyphP() {
+    Glyph p_glyph; p_glyph.character_code = 'P'; // Renamed to avoid conflict
+    float h = GLYPH_DESIGN_HEIGHT; float w_head = GLYPH_DESIGN_WIDTH * 0.9f;
+    float h_head_top = 0; float h_head_bottom = GLYPH_DESIGN_HEIGHT / 2.0f;
+    Point stem_top = { 0,0 }; Point stem_bottom = { 0,h };
+    Point head_top_left = { 0, h_head_top };
+    Point head_top_right_ctrl = { w_head * 1.3f, h_head_top - h_head_bottom * 0.1f };
+    Point head_bottom_right_ctrl = { w_head * 1.3f, h_head_bottom + h_head_bottom * 0.1f };
+    Point head_bottom_left = { 0, h_head_bottom };
 
-    glewExperimental = GL_TRUE;
-    GLenum glewError = glewInit();
-    if (glewError != GLEW_OK) {
-        std::cerr << "Error initializing GLEW! " << glewGetErrorString(glewError) << std::endl;
-        SDL_GL_DeleteContext(gContext);
-        SDL_DestroyWindow(gWindow);
-        IMG_Quit();
-        SDL_Quit();
-        return false;
-    }
+    p_glyph.paths.push_back(make_line(stem_top, stem_bottom));
+    p_glyph.paths.push_back({ head_top_left, head_top_right_ctrl, head_bottom_right_ctrl, head_bottom_left });
+    p_glyph.advanceWidth = w_head + 2.0f; p_glyph.calculateBounds(); return p_glyph;
+}
 
-    if (SDL_GL_SetSwapInterval(1) < 0) {
-        std::cout << "Warning: Unable to set VSync! SDL Error: " << SDL_GetError() << std::endl;
-    }
+Glyph createVectorGlyphQ() {
+    Glyph q_glyph; q_glyph.character_code = 'Q'; // Renamed to avoid conflict
+    float cx = GLYPH_DESIGN_WIDTH / 2.0f; float cy = GLYPH_DESIGN_HEIGHT / 2.0f;
+    float rx = GLYPH_DESIGN_WIDTH / 2.0f; float ry = GLYPH_DESIGN_HEIGHT / 2.0f;
+    float c_bez = 0.552284749831f;
+    q_glyph.paths.push_back({ {cx, cy - ry}, {cx + rx * c_bez, cy - ry}, {cx + rx, cy - ry * c_bez}, {cx + rx, cy} });
+    q_glyph.paths.push_back({ {cx + rx, cy}, {cx + rx, cy + ry * c_bez}, {cx + rx * c_bez, cy + ry}, {cx, cy + ry} });
+    q_glyph.paths.push_back({ {cx, cy + ry}, {cx - rx * c_bez, cy + ry}, {cx - rx, cy + ry * c_bez}, {cx - rx, cy} });
+    q_glyph.paths.push_back({ {cx - rx, cy}, {cx - rx, cy - ry * c_bez}, {cx - rx * c_bez, cy - ry}, {cx, cy - ry} });
+    Point tail_start = { cx + rx * 0.5f, cy + ry * 0.5f };
+    Point tail_end = { cx + rx + 6.0f, cy + ry + 6.0f };
+    q_glyph.paths.push_back(make_line(tail_start, tail_end));
+    q_glyph.advanceWidth = GLYPH_DESIGN_WIDTH + 10.0f; q_glyph.calculateBounds(); return q_glyph;
+}
 
-    GL_CHECK(glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT));
-    GL_CHECK(glEnable(GL_DEPTH_TEST));
-    GL_CHECK(glEnable(GL_BLEND));
-    GL_CHECK(glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+Glyph createVectorGlyphR() {
+    Glyph r_glyph; r_glyph.character_code = 'R'; // Renamed to avoid conflict
+    float h = GLYPH_DESIGN_HEIGHT; float w_head = GLYPH_DESIGN_WIDTH * 0.9f;
+    float h_head_top = 0; float h_head_bottom = GLYPH_DESIGN_HEIGHT / 2.0f;
+    Point stem_top = { 0,0 }; Point stem_bottom = { 0,h };
+    Point head_top_left = { 0, h_head_top };
+    Point head_top_right_ctrl = { w_head * 1.3f, h_head_top - h_head_bottom * 0.1f };
+    Point head_bottom_right_ctrl = { w_head * 1.3f, h_head_bottom + h_head_bottom * 0.1f };
+    Point head_bottom_left = { 0, h_head_bottom };
 
-    gShaderProgramID = createShaderProgram(VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE);
-    if (gShaderProgramID == 0) {
-        std::cerr << "Failed to create shader program." << std::endl;
-        return false;
-    }
+    r_glyph.paths.push_back(make_line(stem_top, stem_bottom));
+    r_glyph.paths.push_back({ head_top_left, head_top_right_ctrl, head_bottom_right_ctrl, head_bottom_left });
+    Point leg_start = { w_head * 0.4f, h_head_bottom };
+    Point leg_end = { w_head * 1.0f, h };
+    r_glyph.paths.push_back(make_line(leg_start, leg_end));
+    r_glyph.advanceWidth = w_head + 5.0f; r_glyph.calculateBounds(); return r_glyph;
+}
+
+// =======================================================================================
+// HÀM ĐƯỢC KHÔI PHỤC THEO ĐIỂM CỦA NGƯỜI DÙNG
+// =======================================================================================
+Glyph createVectorGlyphS() {
+    Glyph s; s.character_code = 'S';
+    float w = GLYPH_DESIGN_WIDTH * 0.9f;
+    float h = GLYPH_DESIGN_HEIGHT;
+
+    // Sử dụng bộ điểm "Further refinement" từ code gốc của bạn
+    Point p0, p1, p2, p3, p4, p5, p6, p7;
+
+    p0 = { w * 0.8f, h * 0.15f };
+    p1 = { w * 1.1f, h * 0.05f }; // Pull top curve more to the right initially
+    p2 = { w * 0.2f, h * 0.35f }; // Bring first curve's end towards center-left
+    p3 = { w * 0.5f, h * 0.5f };  // Center inflection point
+
+    p4 = p3; // Start of bottom curve is the end of the top curve
+    p5 = { w * 0.8f, h * 0.65f }; // Bring second curve's start from center-right
+    p6 = { -w * 0.1f, h * 0.95f }; // Pull bottom curve more to the left at the end
+    p7 = { w * 0.2f, h * 0.85f };
+
+    s.paths.push_back({ p0, p1, p2, p3 });
+    s.paths.push_back({ p4, p5, p6, p7 });
+
+    s.advanceWidth = w + 2.0f; // Giữ nguyên advanceWidth từ code gốc của bạn cho chữ S
+    s.calculateBounds();
+    return s;
+}
+// =======================================================================================
+// KẾT THÚC HÀM KHÔI PHỤC
+// =======================================================================================
+
+Glyph createVectorGlyphT() {
+    Glyph t; t.character_code = 'T';
+    float w = GLYPH_DESIGN_WIDTH; float h = GLYPH_DESIGN_HEIGHT;
+    t.paths.push_back(make_line({ w / 2.0f, 0 }, { w / 2.0f, h }));
+    t.paths.push_back(make_line({ 0, 0 }, { w, 0 }));
+    t.advanceWidth = w + 5.0f; t.calculateBounds(); return t;
+}
+
+Glyph createVectorGlyphU() {
+    Glyph u; u.character_code = 'U';
+    float w = GLYPH_DESIGN_WIDTH * 0.9f; float h = GLYPH_DESIGN_HEIGHT; float r = w / 2.0f;
+    Point ul = { 0,0 }; Point ur = { w,0 };
+    Point bl = { 0, h - r }; Point br = { w, h - r };
+    u.paths.push_back(make_line(ul, bl));
+    u.paths.push_back({ bl, {bl.x, bl.y + r * 1.2f} , {br.x, br.y + r * 1.2f}, br });
+    u.paths.push_back(make_line(br, ur));
+    u.advanceWidth = w + 5.0f; u.calculateBounds(); return u;
+}
+
+Glyph createVectorGlyphV() {
+    Glyph v; v.character_code = 'V';
+    float w = GLYPH_DESIGN_WIDTH; float h = GLYPH_DESIGN_HEIGHT;
+    v.paths.push_back(make_line({ 0,0 }, { w / 2.0f, h }));
+    v.paths.push_back(make_line({ w / 2.0f, h }, { w,0 }));
+    v.advanceWidth = w + 5.0f; v.calculateBounds(); return v;
+}
+
+Glyph createVectorGlyphW() {
+    Glyph w_glyph; w_glyph.character_code = 'W';
+    float w = GLYPH_DESIGN_WIDTH * 1.3f; float h = GLYPH_DESIGN_HEIGHT;
+    Point p0 = { 0,0 }; Point p1 = { w * 0.25f, h }; Point p2 = { w * 0.5f, h * 0.3f };
+    Point p3 = { w * 0.75f, h }; Point p4 = { w,0 };
+    w_glyph.paths.push_back(make_line(p0, p1));
+    w_glyph.paths.push_back(make_line(p1, p2));
+    w_glyph.paths.push_back(make_line(p2, p3));
+    w_glyph.paths.push_back(make_line(p3, p4));
+    w_glyph.advanceWidth = w + 5.0f; w_glyph.calculateBounds(); return w_glyph;
+}
+
+Glyph createVectorGlyphX() {
+    Glyph x_glyph; x_glyph.character_code = 'X';
+    float w = GLYPH_DESIGN_WIDTH * 0.9f; float h = GLYPH_DESIGN_HEIGHT;
+    x_glyph.paths.push_back(make_line({ 0,0 }, { w,h }));
+    x_glyph.paths.push_back(make_line({ w,0 }, { 0,h }));
+    x_glyph.advanceWidth = w + 5.0f; x_glyph.calculateBounds(); return x_glyph;
+}
+
+Glyph createVectorGlyphY() {
+    Glyph y_glyph; y_glyph.character_code = 'Y';
+    float w = GLYPH_DESIGN_WIDTH; float h = GLYPH_DESIGN_HEIGHT;
+    Point top_left = { 0,0 }; Point top_right = { w,0 };
+    Point middle_join = { w / 2.0f, h / 2.0f };
+    Point bottom_stem = { w / 2.0f, h };
+    y_glyph.paths.push_back(make_line(top_left, middle_join));
+    y_glyph.paths.push_back(make_line(top_right, middle_join));
+    y_glyph.paths.push_back(make_line(middle_join, bottom_stem));
+    y_glyph.advanceWidth = w + 5.0f; y_glyph.calculateBounds(); return y_glyph;
+}
+
+Glyph createVectorGlyphZ() {
+    Glyph z_glyph; z_glyph.character_code = 'Z';
+    float w = GLYPH_DESIGN_WIDTH * 0.9f; float h = GLYPH_DESIGN_HEIGHT;
+    z_glyph.paths.push_back(make_line({ 0,0 }, { w,0 }));
+    z_glyph.paths.push_back(make_line({ w,0 }, { 0,h }));
+    z_glyph.paths.push_back(make_line({ 0,h }, { w,h }));
+    z_glyph.advanceWidth = w + 5.0f; z_glyph.calculateBounds(); return z_glyph;
+}
+
+
+// --- SDL Initialization and Main Loop ---
+SDL_Window* gWindow_alph = nullptr;
+SDL_Renderer* gRenderer_alph = nullptr;
+
+bool initSDL_Alphabet() {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) { std::cerr << "SDL could not initialize! SDL Error: " << SDL_GetError() << std::endl; return false; }
+    gWindow_alph = SDL_CreateWindow("Vector Alphabet Demo (SDL2_gfx)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        1200, 800, SDL_WINDOW_SHOWN);
+    if (!gWindow_alph) { std::cerr << "Window could not be created! SDL Error: " << SDL_GetError() << std::endl; return false; }
+    gRenderer_alph = SDL_CreateRenderer(gWindow_alph, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!gRenderer_alph) { std::cerr << "Renderer could not be created! SDL Error: " << SDL_GetError() << std::endl; return false; }
     return true;
 }
 
-void parseCommonLine(const std::string& line) {
-    std::stringstream ss(line);
-    std::string key_value_pair;
-    while (ss >> key_value_pair) { // Read space-separated key=value pairs
-        size_t eqPos = key_value_pair.find('=');
-        if (eqPos != std::string::npos) {
-            std::string key = key_value_pair.substr(0, eqPos);
-            std::string value_str = key_value_pair.substr(eqPos + 1);
-            // Remove quotes from value if any
-            if (!value_str.empty() && value_str.front() == '"' && value_str.back() == '"' && value_str.length() >= 2) {
-                value_str = value_str.substr(1, value_str.length() - 2);
-            }
-            try {
-                if (key == "lineHeight") {
-                    gFontLineHeight = std::stof(value_str);
-                }
-                else if (key == "base") {
-                    gFontBase = std::stof(value_str);
-                }
-            }
-            catch (const std::invalid_argument& ia) {
-                std::cerr << "WARNING: Invalid argument for " << key << ": " << value_str << std::endl;
-            }
-            catch (const std::out_of_range& oor) {
-                std::cerr << "WARNING: Out of range for " << key << ": " << value_str << std::endl;
-            }
-        }
-    }
-}
-
-
-bool loadFontAtlas(const std::string& imagePath, const std::string& dataPath) {
-    std::cout << "INFO: Attempting to load font image: [" << imagePath << "]" << std::endl;
-    SDL_Surface* surface = IMG_Load(imagePath.c_str());
-    if (!surface) {
-        std::cerr << "Failed to load font atlas image: " << imagePath << " SDL_image Error: " << IMG_GetError() << std::endl;
-        return false;
-    }
-    std::cout << "INFO: Successfully loaded font image: " << imagePath << std::endl;
-
-    gFontAtlasWidth = static_cast<float>(surface->w);
-    gFontAtlasHeight = static_cast<float>(surface->h);
-
-    GL_CHECK(glGenTextures(1, &gFontTextureID));
-    GL_CHECK(glBindTexture(GL_TEXTURE_2D, gFontTextureID));
-    GL_CHECK(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
-    GL_CHECK(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
-    GL_CHECK(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR));
-    GL_CHECK(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
-
-    GLenum format;
-    if (surface->format->BytesPerPixel == 4) {
-        format = (surface->format->Rmask == 0x000000ff) ? GL_RGBA : GL_BGRA;
-    }
-    else if (surface->format->BytesPerPixel == 3) {
-        format = (surface->format->Rmask == 0x000000ff) ? GL_RGB : GL_BGR;
-    }
-    else {
-        std::cerr << "Unsupported font atlas image format: " << SDL_GetPixelFormatName(surface->format->format) << std::endl;
-        SDL_FreeSurface(surface);
-        GL_CHECK(glDeleteTextures(1, &gFontTextureID));
-        gFontTextureID = 0;
-        return false;
-    }
-    GL_CHECK(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, surface->w, surface->h, 0, format, GL_UNSIGNED_BYTE, surface->pixels));
-    GL_CHECK(glGenerateMipmap(GL_TEXTURE_2D));
-    SDL_FreeSurface(surface);
-
-    std::cout << "INFO: Attempting to open font data file: [" << dataPath << "]" << std::endl;
-    std::ifstream dataFile(dataPath);
-    if (!dataFile.is_open()) {
-        std::cerr << "Failed to open font data file: " << dataPath << std::endl;
-        GL_CHECK(glDeleteTextures(1, &gFontTextureID));
-        gFontTextureID = 0;
-        return false;
-    }
-    std::cout << "INFO: Successfully opened font data file: " << dataPath << std::endl;
-
-    std::string line;
-    bool commonLineParsed = false;
-    bool firstLineIsHeight = false;
-
-    if (std::getline(dataFile, line)) {
-        if (line.rfind("common lineHeight=", 0) == 0) {
-            parseCommonLine(line);
-            commonLineParsed = true;
-            std::cout << "INFO: Parsed BMFont common line. LineHeight: " << gFontLineHeight << ", Base: " << gFontBase << std::endl;
-        }
-        else {
-            try {
-                gFontLineHeight = std::stof(line);
-                std::cout << "INFO: Font line height from simple .dat (first line): " << gFontLineHeight << std::endl;
-                if (gFontBase == 0 && gFontLineHeight > 0) gFontBase = gFontLineHeight * 0.8f;
-                commonLineParsed = true;
-                firstLineIsHeight = true;
-            }
-            catch (const std::exception& e) {
-                dataFile.clear();
-                dataFile.seekg(0);
-                gFontLineHeight = 0;
-            }
-        }
-    }
-    else {
-        std::cerr << "ERROR: Font data file is empty or could not be read." << std::endl;
-        dataFile.close();
-        return false;
-    }
-
-
-    while (std::getline(dataFile, line)) {
-        if (line.rfind("info face=", 0) == 0 ||
-            (line.rfind("common lineHeight=", 0) == 0 && !firstLineIsHeight) || // Avoid re-parsing if already done
-            line.rfind("page id=", 0) == 0 ||
-            line.rfind("chars count=", 0) == 0) {
-            if (line.rfind("common lineHeight=", 0) == 0 && !firstLineIsHeight) {
-                parseCommonLine(line);
-                commonLineParsed = true;
-                std::cout << "INFO: Parsed BMFont common line (inside loop). LineHeight: " << gFontLineHeight << ", Base: " << gFontBase << std::endl;
-            }
-            continue;
-        }
-
-        std::stringstream ss(line);
-        if (line.rfind("char id=", 0) == 0) {
-            std::string token;
-            int charId = 0;
-            CharInfo info;
-            while (ss >> token) {
-                size_t eqPos = token.find('=');
-                if (eqPos != std::string::npos) {
-                    std::string key = token.substr(0, eqPos);
-                    std::string value_str = token.substr(eqPos + 1);
-                    if (!value_str.empty() && value_str.front() == '"' && value_str.back() == '"' && value_str.length() >= 2) {
-                        value_str = value_str.substr(1, value_str.length() - 2);
-                    }
-                    try {
-                        if (key == "id") charId = std::stoi(value_str);
-                        else if (key == "x") info.u1 = std::stof(value_str);
-                        else if (key == "y") info.v1 = std::stof(value_str);
-                        else if (key == "width") info.width = std::stof(value_str);
-                        else if (key == "height") info.height = std::stof(value_str);
-                        else if (key == "xoffset") info.offsetX = std::stof(value_str);
-                        else if (key == "yoffset") info.offsetY = std::stof(value_str);
-                        else if (key == "xadvance") info.advanceX = std::stof(value_str);
-                    }
-                    catch (const std::exception& e) {
-                        std::cerr << "WARNING: Could not parse BMFont value for " << key << " in line: " << line << " Error: " << e.what() << std::endl;
-                    }
-                }
-            }
-            if (charId > 0) {
-                info.u2 = info.u1 + info.width;
-                info.v2 = info.v1 + info.height;
-                info.u1 /= gFontAtlasWidth;
-                info.v1 /= gFontAtlasHeight;
-                info.u2 /= gFontAtlasWidth;
-                info.v2 /= gFontAtlasHeight;
-                gFontMap[static_cast<char>(charId)] = info;
-            }
-        }
-        else { // Simple .dat format for char lines
-            char c_code_char_simple;
-            float x_s, y_s, w_s, h_s, advX_s, offX_s = 0, offY_s = 0;
-            // Reset stringstream for the current line
-            ss.clear();
-            ss.str(line);
-            if (ss >> c_code_char_simple >> x_s >> y_s >> w_s >> h_s >> advX_s) {
-                if (!(ss >> offX_s)) offX_s = 0;
-                if (!(ss >> offY_s)) offY_s = 0;
-
-                CharInfo info;
-                info.u1 = x_s / gFontAtlasWidth;
-                info.v1 = y_s / gFontAtlasHeight;
-                info.u2 = (x_s + w_s) / gFontAtlasWidth;
-                info.v2 = (y_s + h_s) / gFontAtlasHeight;
-                info.width = w_s;
-                info.height = h_s;
-                info.advanceX = advX_s;
-                info.offsetX = offX_s;
-                info.offsetY = offY_s;
-                gFontMap[c_code_char_simple] = info;
-                if (gFontLineHeight == 0 && h_s > 0 && !firstLineIsHeight) gFontLineHeight = h_s;
-                if (gFontBase == 0 && gFontLineHeight > 0 && !commonLineParsed) gFontBase = gFontLineHeight * 0.8f;
-            }
-            else if (!line.empty() && line.find_first_not_of(" \t\n\v\f\r") != std::string::npos) { // Only warn if line is not just whitespace
-                std::cerr << "WARNING: Malformed line in simple .dat: [" << line << "]" << std::endl;
-            }
-        }
-    }
-    dataFile.close();
-
-    if (gFontMap.empty()) {
-        std::cerr << "No character data loaded from " << dataPath << std::endl;
-        GL_CHECK(glDeleteTextures(1, &gFontTextureID));
-        gFontTextureID = 0;
-        return false;
-    }
-    if (gFontLineHeight == 0) {
-        if (!gFontMap.empty()) gFontLineHeight = gFontMap.begin()->second.height;
-        if (gFontLineHeight == 0) gFontLineHeight = 16;
-        std::cout << "WARNING: Font line height not determined, defaulting to " << gFontLineHeight << std::endl;
-    }
-    if (gFontBase == 0 && gFontLineHeight > 0) {
-        gFontBase = gFontLineHeight * 0.8f;
-        std::cout << "WARNING: Font base not determined, estimated to " << gFontBase << std::endl;
-    }
-
-    GL_CHECK(glBindTexture(GL_TEXTURE_2D, 0));
-    std::cout << "INFO: Font loaded successfully." << std::endl;
-    return true;
-}
-
-void generateTextMeshPart(const std::string& text, float scale, std::vector<Vertex3D>& allVertices, float& outTextBlockWidth) {
-    float currentX = 0.0f;
-    float currentY_baseline = 0.0f;
-    outTextBlockWidth = 0.0f;
-
-    for (char c : text) {
-        auto it = gFontMap.find(c);
-        if (c == ' ' && it == gFontMap.end()) {
-            float spaceAdvance = gFontLineHeight * 0.3f * scale;
-            auto questionMarkIt = gFontMap.find('?');
-            if (questionMarkIt != gFontMap.end()) {
-                spaceAdvance = questionMarkIt->second.advanceX * scale * 0.5f;
-            }
-            else if (!gFontMap.empty()) {
-                spaceAdvance = gFontMap.begin()->second.advanceX * scale * 0.5f;
-            }
-            currentX += spaceAdvance;
-            outTextBlockWidth += spaceAdvance;
-            continue;
-        }
-
-        if (it == gFontMap.end()) {
-            it = gFontMap.find('?');
-            if (it == gFontMap.end() && !gFontMap.empty()) it = gFontMap.begin();
-            if (it == gFontMap.end()) continue;
-        }
-        const CharInfo& info = it->second;
-
-        float y_bearing_scaled = (gFontBase - info.offsetY) * scale;
-        float x_offset_scaled = info.offsetX * scale;
-
-        float xPos = currentX + x_offset_scaled;
-        float yPos_top_of_char = currentY_baseline + y_bearing_scaled;
-
-        float w = info.width * scale;
-        float h = info.height * scale;
-
-        glm::vec3 tl = { xPos,     yPos_top_of_char,     0.0f };
-        glm::vec3 bl = { xPos,     yPos_top_of_char - h, 0.0f };
-        glm::vec3 br = { xPos + w, yPos_top_of_char - h, 0.0f };
-        glm::vec3 tr = { xPos + w, yPos_top_of_char,     0.0f };
-
-        glm::vec2 uv_tl = { info.u1, info.v1 };
-        glm::vec2 uv_bl = { info.u1, info.v2 };
-        glm::vec2 uv_br = { info.u2, info.v2 };
-        glm::vec2 uv_tr = { info.u2, info.v1 };
-
-        allVertices.push_back({ tl, uv_tl });
-        allVertices.push_back({ bl, uv_bl });
-        allVertices.push_back({ br, uv_br });
-        allVertices.push_back({ tl, uv_tl });
-        allVertices.push_back({ br, uv_br });
-        allVertices.push_back({ tr, uv_tr });
-
-        currentX += info.advanceX * scale;
-        outTextBlockWidth = currentX;
-    }
-}
-
-void setupCombinedTextVBO() {
-    if (gAllTextVertices.empty()) {
-        std::cout << "WARNING: No vertices to setup for VBO." << std::endl;
-        return;
-    }
-
-    if (gTextVAO == 0) GL_CHECK(glGenVertexArrays(1, &gTextVAO));
-    if (gTextVBO == 0) GL_CHECK(glGenBuffers(1, &gTextVBO));
-
-    GL_CHECK(glBindVertexArray(gTextVAO));
-    GL_CHECK(glBindBuffer(GL_ARRAY_BUFFER, gTextVBO));
-    GL_CHECK(glBufferData(GL_ARRAY_BUFFER, gAllTextVertices.size() * sizeof(Vertex3D), gAllTextVertices.data(), GL_STATIC_DRAW));
-
-    GL_CHECK(glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex3D), (void*)offsetof(Vertex3D, position)));
-    GL_CHECK(glEnableVertexAttribArray(0));
-    GL_CHECK(glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex3D), (void*)offsetof(Vertex3D, texCoords)));
-    GL_CHECK(glEnableVertexAttribArray(1));
-
-    GL_CHECK(glBindBuffer(GL_ARRAY_BUFFER, 0));
-    GL_CHECK(glBindVertexArray(0));
-}
-
-
-void render() {
-    GL_CHECK(glClearColor(0.05f, 0.05f, 0.1f, 1.0f));
-    GL_CHECK(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
-
-    if (gShaderProgramID == 0 || gFontTextureID == 0 || gTextVAO == 0) return;
-
-    GL_CHECK(glUseProgram(gShaderProgramID));
-
-    glm::mat4 view = glm::lookAt(
-        glm::vec3(0.0f, gCameraPitch, gCameraDistance),
-        glm::vec3(0.0f, 0.0f, 0.0f),
-        glm::vec3(0.0f, 1.0f, 0.0f)
-    );
-    view = glm::rotate(view, glm::radians(gCameraYaw), glm::vec3(0.0f, 1.0f, 0.0f));
-
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, 0.1f, 1000.0f);
-
-    GL_CHECK(glUniformMatrix4fv(glGetUniformLocation(gShaderProgramID, "view"), 1, GL_FALSE, glm::value_ptr(view)));
-    GL_CHECK(glUniformMatrix4fv(glGetUniformLocation(gShaderProgramID, "projection"), 1, GL_FALSE, glm::value_ptr(projection)));
-    GL_CHECK(glUniform3f(glGetUniformLocation(gShaderProgramID, "textColor"), 1.0f, 0.8f, 0.3f));
-
-    GL_CHECK(glActiveTexture(GL_TEXTURE0));
-    GL_CHECK(glBindTexture(GL_TEXTURE_2D, gFontTextureID));
-    GL_CHECK(glUniform1i(glGetUniformLocation(gShaderProgramID, "textTexture"), 0));
-
-    GL_CHECK(glBindVertexArray(gTextVAO));
-
-    if (gVertexCount_Part1 > 0) {
-        glm::mat4 model1 = glm::mat4(1.0f);
-        model1 = glm::translate(model1, glm::vec3(-gTextBlockWidth_Part1 / 2.0f, 30.0f, 10.0f));
-        model1 = glm::rotate(model1, glm::radians(gMonumentRotationX), glm::vec3(1.0f, 0.0f, 0.0f));
-        GL_CHECK(glUniformMatrix4fv(glGetUniformLocation(gShaderProgramID, "model"), 1, GL_FALSE, glm::value_ptr(model1)));
-        GL_CHECK(glDrawArrays(GL_TRIANGLES, gVertexOffset_Part1, gVertexCount_Part1));
-    }
-
-    if (gVertexCount_Part2 > 0) {
-        glm::mat4 model2 = glm::mat4(1.0f);
-        model2 = glm::translate(model2, glm::vec3(-gTextBlockWidth_Part2 / 2.0f, 0.0f, 0.0f));
-        model2 = glm::rotate(model2, glm::radians(gMonumentRotationX), glm::vec3(1.0f, 0.0f, 0.0f));
-        GL_CHECK(glUniformMatrix4fv(glGetUniformLocation(gShaderProgramID, "model"), 1, GL_FALSE, glm::value_ptr(model2)));
-        GL_CHECK(glDrawArrays(GL_TRIANGLES, gVertexOffset_Part2, gVertexCount_Part2));
-    }
-
-    if (gVertexCount_Part3 > 0) {
-        glm::mat4 model3 = glm::mat4(1.0f);
-        model3 = glm::translate(model3, glm::vec3(-gTextBlockWidth_Part3 / 2.0f, -40.0f, -10.0f));
-        model3 = glm::rotate(model3, glm::radians(gMonumentRotationX), glm::vec3(1.0f, 0.0f, 0.0f));
-        GL_CHECK(glUniformMatrix4fv(glGetUniformLocation(gShaderProgramID, "model"), 1, GL_FALSE, glm::value_ptr(model3)));
-        GL_CHECK(glDrawArrays(GL_TRIANGLES, gVertexOffset_Part3, gVertexCount_Part3));
-    }
-
-    GL_CHECK(glBindVertexArray(0));
-    GL_CHECK(glUseProgram(0));
-}
-
-void cleanup() {
-    if (gTextVAO != 0) GL_CHECK(glDeleteVertexArrays(1, &gTextVAO));
-    if (gTextVBO != 0) GL_CHECK(glDeleteBuffers(1, &gTextVBO));
-    if (gFontTextureID != 0) GL_CHECK(glDeleteTextures(1, &gFontTextureID));
-    if (gShaderProgramID != 0) GL_CHECK(glDeleteProgram(gShaderProgramID));
-    SDL_GL_DeleteContext(gContext);
-    SDL_DestroyWindow(gWindow);
-    gWindow = nullptr;
-    IMG_Quit();
+void closeSDL_Alphabet() {
+    SDL_DestroyRenderer(gRenderer_alph);
+    SDL_DestroyWindow(gWindow_alph);
+    gWindow_alph = nullptr; gRenderer_alph = nullptr;
     SDL_Quit();
 }
 
 int main(int argc, char* args[]) {
-    std::cout << "INFO: Program starting." << std::endl;
-    if (!init()) {
-        std::cerr << "Initialization failed!" << std::endl;
-        cleanup();
-#ifdef _WIN32
-        std::cout << "Press any key to exit..." << std::endl;
-        std::cin.get();
-#endif
-        return 1;
-    }
+    if (!initSDL_Alphabet()) { std::cerr << "Failed to initialize SDL!" << std::endl; return -1; }
 
-    std::cout << "INFO: Initialization successful." << std::endl;
-    try {
-        std::cout << "INFO: Current Working Directory: [" << std::filesystem::current_path() << "]" << std::endl;
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Error getting current_path: " << e.what() << std::endl;
-    }
-
-    std::string fontImagePath = "C:/Users/ghlhn/Downloads/big_project_CG/x64/Debug/font_atlas.png";
-    std::string fontDataPath = "C:/Users/ghlhn/Downloads/big_project_CG/x64/Debug/font_atlas.dat";
-
-    if (!loadFontAtlas(fontImagePath, fontDataPath)) {
-        std::cerr << "Font loading failed!" << std::endl;
-        cleanup();
-#ifdef _WIN32
-        std::cout << "Press any key to exit..." << std::endl;
-        std::cin.get();
-#endif
-        return 1;
-    }
-    std::cout << "INFO: Main font loaded successfully." << std::endl;
-
-    gAllTextVertices.clear();
-
-    gVertexOffset_Part1 = 0;
-    generateTextMeshPart("20th", 20.0f, gAllTextVertices, gTextBlockWidth_Part1); // Increased scale
-    gVertexCount_Part1 = gAllTextVertices.size();
-
-    gVertexOffset_Part2 = gAllTextVertices.size();
-    generateTextMeshPart("CENTURY", 25.0f, gAllTextVertices, gTextBlockWidth_Part2); // Increased scale
-    gVertexCount_Part2 = gAllTextVertices.size() - gVertexOffset_Part2;
-
-    gVertexOffset_Part3 = gAllTextVertices.size();
-    generateTextMeshPart("FOX", 35.0f, gAllTextVertices, gTextBlockWidth_Part3);  // Increased scale
-    gVertexCount_Part3 = gAllTextVertices.size() - gVertexOffset_Part3;
-
-    setupCombinedTextVBO();
-    std::cout << "INFO: Text mesh generated. Total vertices: " << gAllTextVertices.size() << std::endl;
-    std::cout << "Part 1: Offset=" << gVertexOffset_Part1 << ", Count=" << gVertexCount_Part1 << ", Width=" << gTextBlockWidth_Part1 << std::endl;
-    std::cout << "Part 2: Offset=" << gVertexOffset_Part2 << ", Count=" << gVertexCount_Part2 << ", Width=" << gTextBlockWidth_Part2 << std::endl;
-    std::cout << "Part 3: Offset=" << gVertexOffset_Part3 << ", Count=" << gVertexCount_Part3 << ", Width=" << gTextBlockWidth_Part3 << std::endl;
-
+    std::vector<Glyph> alphabet;
+    alphabet.push_back(createVectorGlyphN());
+    alphabet.push_back(createVectorGlyphO());
+    alphabet.push_back(createVectorGlyphP());
+    alphabet.push_back(createVectorGlyphQ());
+    alphabet.push_back(createVectorGlyphR());
+    alphabet.push_back(createVectorGlyphS());
+    alphabet.push_back(createVectorGlyphT());
+    alphabet.push_back(createVectorGlyphU());
+    alphabet.push_back(createVectorGlyphV());
+    alphabet.push_back(createVectorGlyphW());
+    alphabet.push_back(createVectorGlyphX());
+    alphabet.push_back(createVectorGlyphY());
+    alphabet.push_back(createVectorGlyphZ());
 
     bool quit = false;
     SDL_Event e;
-    Uint32 lastTime = SDL_GetTicks();
+    float displayScale = 4.0f;
+    SDL_Color drawingColor = { 30, 30, 30, 255 };
+    Uint8 lineThickness = 3;
 
-    float totalRunTime = 0.0f; // For simple animation timing if needed
+    SDL_SetRenderDrawBlendMode(gRenderer_alph, SDL_BLENDMODE_BLEND);
+
+    Point currentDisplayPos = { 30, 60 };
+    float lineSpacingFactor = 1.5f;
+    float letterSpacing = 5.0f * displayScale;
+
+
+    int screenWidth, screenHeight;
+    SDL_GetRendererOutputSize(gRenderer_alph, &screenWidth, &screenHeight);
+    float screenRenderWidth = static_cast<float>(screenWidth - currentDisplayPos.x);
+
 
     while (!quit) {
-        Uint32 currentTime = SDL_GetTicks();
-        float deltaTime = (currentTime - lastTime) / 1000.0f;
-        lastTime = currentTime;
-        totalRunTime += deltaTime;
-
         while (SDL_PollEvent(&e) != 0) {
-            if (e.type == SDL_QUIT) {
-                quit = true;
-            }
+            if (e.type == SDL_QUIT) quit = true;
             if (e.type == SDL_KEYDOWN) {
-                if (e.key.keysym.sym == SDLK_ESCAPE) {
-                    quit = true;
+                if (e.key.keysym.sym == SDLK_UP) {
+                    lineThickness = std::min((Uint8)10, (Uint8)(lineThickness + 1));
                 }
-                float camMoveSpeed = 50.0f * deltaTime;
-                float camRotSpeed = 60.0f * deltaTime;
+                else if (e.key.keysym.sym == SDLK_DOWN) {
+                    lineThickness = std::max((Uint8)1, (Uint8)(lineThickness - 1));
+                }
+                else if (e.key.keysym.sym == SDLK_LEFT) {
+                    displayScale = std::max(0.5f, displayScale - 0.2f);
+                    letterSpacing = 5.0f * displayScale;
 
-                if (e.key.keysym.sym == SDLK_UP) gCameraPitch += camRotSpeed;
-                if (e.key.keysym.sym == SDLK_DOWN) gCameraPitch -= camRotSpeed;
-                if (e.key.keysym.sym == SDLK_LEFT) gCameraYaw -= camRotSpeed;
-                if (e.key.keysym.sym == SDLK_RIGHT) gCameraYaw += camRotSpeed;
-                if (e.key.keysym.sym == SDLK_PAGEUP) gCameraDistance -= camMoveSpeed * 5.0f;
-                if (e.key.keysym.sym == SDLK_PAGEDOWN) gCameraDistance += camMoveSpeed * 5.0f;
+                }
+                else if (e.key.keysym.sym == SDLK_RIGHT) {
+                    displayScale = std::min(10.0f, displayScale + 0.2f);
+                    letterSpacing = 5.0f * displayScale;
+                }
             }
         }
 
-        // Simple intro animation for camera (optional)
-        // if (totalRunTime < 5.0f) { // Zoom in for 5 seconds
-        //     gCameraDistance = 300.0f - (totalRunTime / 5.0f) * 150.0f;
-        // } else {
-        //     gCameraDistance = 150.0f;
-        // }
+        SDL_SetRenderDrawColor(gRenderer_alph, 245, 245, 245, 255);
+        SDL_RenderClear(gRenderer_alph);
+
+        Point renderPos = currentDisplayPos;
+        float currentLineMaxHeight = 0.0f;
 
 
-        render();
-        SDL_GL_SwapWindow(gWindow);
+        for (const auto& glyph : alphabet) {
+            if (glyph.paths.empty() && glyph.character_code != ' ') continue;
+
+            Point glyphOriginalSize = glyph.getSize();
+            float glyphDisplayWidth = glyph.advanceWidth * displayScale;
+            // Sử dụng kích thước thực tế của glyph để tính chiều cao hiển thị, thay vì GLYPH_DESIGN_HEIGHT
+            // Điều này quan trọng vì calculateBounds() sẽ cho chiều cao thực tế của từng glyph
+            float glyphDisplayHeight = (glyph.maxBounds.y - glyph.minBounds.y) * displayScale;
+            if (glyphDisplayHeight <= 0 && glyph.character_code != ' ') { // Xử lý trường hợp glyph không có chiều cao (ví dụ: chỉ có đường ngang)
+                glyphDisplayHeight = GLYPH_DESIGN_HEIGHT * displayScale * 0.1f; // Gán một chiều cao nhỏ để không làm hỏng layout
+            }
+
+
+            if (renderPos.x + glyphDisplayWidth > screenRenderWidth && renderPos.x > currentDisplayPos.x) {
+                renderPos.x = currentDisplayPos.x;
+                renderPos.y += currentLineMaxHeight * lineSpacingFactor;
+                currentLineMaxHeight = 0;
+            }
+
+            currentLineMaxHeight = std::max(currentLineMaxHeight, glyphDisplayHeight);
+
+
+            Point topLeftOfBoundingBox = renderPos;
+            // Không cần điều chỉnh Y dựa trên maxBounds nữa nếu calculateBounds hoạt động chính xác
+            // và các điểm được định nghĩa với gốc (0,0) ở góc trên bên trái của bounding box thiết kế.
+            // Tuy nhiên, nếu bạn muốn các ký tự căn chỉnh theo một đường baseline cụ thể,
+            // bạn có thể cần tính toán offset dựa trên minBounds.y hoặc maxBounds.y
+            // Ví dụ, để căn theo đáy:
+            // topLeftOfBoundingBox.y += (GLYPH_DESIGN_HEIGHT - glyph.maxBounds.y) * displayScale; 
+            // Hoặc căn theo đỉnh:
+            // topLeftOfBoundingBox.y -= glyph.minBounds.y * displayScale;
+
+
+            renderTransformedGlyph_AntiAliased(gRenderer_alph, glyph, displayScale, topLeftOfBoundingBox, drawingColor, 30 /*segments*/, lineThickness);
+            renderPos.x += glyphDisplayWidth + letterSpacing;
+        }
+
+        SDL_RenderPresent(gRenderer_alph);
     }
 
-    cleanup();
-    std::cout << "INFO: Program ended." << std::endl;
-#ifdef _WIN32
-    std::cout << "Press any key to exit..." << std::endl;
-    std::cin.get();
-#endif
+    closeSDL_Alphabet();
     return 0;
 }

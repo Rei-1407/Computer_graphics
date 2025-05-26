@@ -71,8 +71,8 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\glew-2.1.0\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2-2.32.2\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_image-2.8.8\include;$(IncludePath)</IncludePath>
-    <LibraryPath>C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\glew-2.1.0\lib\Release\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_image-2.8.8\lib\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2-2.32.2\lib\x64;$(LibraryPath)</LibraryPath>
+    <IncludePath>C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_gfx-1.0.4\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\glew-2.1.0\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2-2.32.2\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_image-2.8.8\include;$(IncludePath)</IncludePath>
+    <LibraryPath>C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_gfx-1.0.4\lib\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\glew-2.1.0\lib\Release\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_image-2.8.8\lib\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2-2.32.2\lib\x64;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -114,7 +114,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>SDL2.lib;SDL2main.lib;SDL2_image.lib;glew32s.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SDL2_gfx.lib;SDL2.lib;SDL2main.lib;SDL2_image.lib;glew32s.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
