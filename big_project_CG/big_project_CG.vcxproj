@@ -71,8 +71,8 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\glew-2.1.0\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2-2.32.2\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_image-2.8.8\include;$(IncludePath)</IncludePath>
-    <LibraryPath>C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\glew-2.1.0\lib\Release\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_image-2.8.8\lib\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2-2.32.2\lib\x64;$(LibraryPath)</LibraryPath>
+    <IncludePath>C:\Users\ghlhn\Downloads\SDL2_ttf-2.24.0\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_gfx-1.0.4\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\glew-2.1.0\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2-2.32.2\include;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_image-2.8.8\include;$(IncludePath)</IncludePath>
+    <LibraryPath>C:\Users\ghlhn\Downloads\SDL2_ttf-2.24.0\lib\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_gfx-1.0.4\lib\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\glew-2.1.0\lib\Release\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2_image-2.8.8\lib\x64;C:\Users\ghlhn\Downloads\BTL kỹ thuật đồ họa\SDL2-2.32.2\lib\x64;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -112,9 +112,9 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>SDL2.lib;SDL2main.lib;SDL2_image.lib;glew32s.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SDL2_ttf.lib;SDL2_gfx.lib;SDL2.lib;SDL2main.lib;SDL2_image.lib;glew32s.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -135,6 +135,36 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Bitmap.h" />
+    <ClInclude Include="DrawA.h" />
+    <ClInclude Include="DrawB.h" />
+    <ClInclude Include="DrawC.h" />
+    <ClInclude Include="DrawD.h" />
+    <ClInclude Include="DrawE.h" />
+    <ClInclude Include="DrawF.h" />
+    <ClInclude Include="DrawG.h" />
+    <ClInclude Include="DrawH.h" />
+    <ClInclude Include="DrawI.h" />
+    <ClInclude Include="DrawJ.h" />
+    <ClInclude Include="DrawK.h" />
+    <ClInclude Include="DrawL.h" />
+    <ClInclude Include="DrawM.h" />
+    <ClInclude Include="DrawN.h" />
+    <ClInclude Include="DrawO.h" />
+    <ClInclude Include="DrawP.h" />
+    <ClInclude Include="DrawQ.h" />
+    <ClInclude Include="DrawR.h" />
+    <ClInclude Include="DrawS.h" />
+    <ClInclude Include="DrawT.h" />
+    <ClInclude Include="DrawU.h" />
+    <ClInclude Include="DrawV.h" />
+    <ClInclude Include="DrawW.h" />
+    <ClInclude Include="DrawX.h" />
+    <ClInclude Include="DrawY.h" />
+    <ClInclude Include="DrawZ.h" />
+    <ClInclude Include="SDL_set_up.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
